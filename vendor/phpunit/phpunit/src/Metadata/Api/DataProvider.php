@@ -164,6 +164,11 @@ final class DataProvider
                     $data = $method->invoke($object, $_dataProvider->methodName());
                 }
             } catch (Throwable $e) {
+                Event\Facade::emitter()->dataProviderMethodFinished(
+                    $testMethod,
+                    ...$methodsCalled,
+                );
+
                 throw new InvalidDataProviderException(
                     $e->getMessage(),
                     $e->getCode(),
@@ -179,6 +184,11 @@ final class DataProvider
                     if (is_int($key)) {
                         $data[] = $value;
                     } elseif (array_key_exists($key, $data)) {
+                        Event\Facade::emitter()->dataProviderMethodFinished(
+                            $testMethod,
+                            ...$methodsCalled,
+                        );
+
                         throw new InvalidDataProviderException(
                             sprintf(
                                 'The key "%s" has already been defined by a previous data provider',
@@ -226,7 +236,7 @@ final class DataProvider
     {
         $docComment = (new ReflectionMethod($className, $methodName))->getDocComment();
 
-        if (!$docComment) {
+        if ($docComment === false) {
             return null;
         }
 
@@ -239,14 +249,14 @@ final class DataProvider
             return null;
         }
 
-        $offset            = strlen($matches[0][0]) + $matches[0][1];
+        $offset            = strlen($matches[0][0]) + (int) $matches[0][1];
         $annotationContent = substr($docComment, $offset);
         $data              = [];
 
         foreach (explode("\n", $annotationContent) as $candidateRow) {
             $candidateRow = trim($candidateRow);
 
-            if ($candidateRow[0] !== '[') {
+            if ($candidateRow === '' || $candidateRow[0] !== '[') {
                 break;
             }
 
