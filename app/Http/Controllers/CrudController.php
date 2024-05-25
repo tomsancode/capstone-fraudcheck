@@ -2,21 +2,28 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Controller;
 use App\Models\AnswereQuestion;
+use App\Models\BisnisUnit;
 use App\Models\CategoryCourses;
-use App\Models\CategoryVideo;
 use App\Models\Certificate;
-use Illuminate\Http\Request;
-use App\Models\User;
-use Illuminate\Support\Facades\Auth;
 use App\Models\Courses;
 use App\Models\Enroll;
 use App\Models\Enrollment;
 use App\Models\OptionQuestion;
 use App\Models\QuestionQuiz;
 use App\Models\Quiz;
+use App\Models\User;
 use App\Models\Videos;
-use App\Models\role;
+use App\Models\Region;
+use App\Models\OrderItem;
+use App\Models\Order;
+use App\Models\Shipment;
+use App\Models\FraudReport;
+use App\Models\FraudReportItem;
+use App\Models\Point;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Http\Request;
 class CrudController extends Controller
 {
     // Select Position
@@ -39,622 +46,183 @@ class CrudController extends Controller
      //}
 }
 
+public function assignDriver(Request $request)
+{
 
-    // Select Unit
-    // public function SelectedUnit(Request $request)
-    // {
-    //     $request->validate([
-    //         'BisnisUnit' => 'required',
-    //     ]);
+    \Log::info('Request Data:', $request->all()); // Ini akan menampilkan semua data yang dikirim ke log
 
-    //     $data = [
-    //         'Bisnis_Unit_Id' => $request->BisnisUnit,
-    //     ];
+    $validatedData = $request->validate([
+        'order_id' => 'required|exists:orders,order_id',
+        'assigned_user_id' => 'required|exists:users,user_id'
+    ]);
 
-    //     User::where('user_id', Auth::user()->user_id)->update($data);
+    \Log::info('Validated Data:', $validatedData);
 
-    //     if(User::where('user_id', Auth::user()->role) === 'Trainer'){
-    //         $data = [
-    //             'id_region' => 1,
-    //         ];
-    //         User::where('user_id', Auth::user()->user_id)->update($data);
-    //         return redirect()->intended('/');
-    //     }
+    $order = Order::findOrFail($validatedData['order_id']);
+    $order->user_id = $validatedData['assigned_user_id'];
+    $order->save();
 
-    //     return redirect()->route('SelectRegion');
-    // }
+    return redirect()->route('DataOrder')->with('success', 'Driver assigned successfully.');
+}
 
-    // Select Region
-    public function SelectedRegion(Request $request)
-    {
-        $request->validate([
-            'Region' => 'required',
-        ]);
+public function acceptOrder($orderId)
+{
+    $order = Order::with('shipment')->findOrFail($orderId);
+    $order->status = 'shipped';
+    $order->save();
 
-        $data = [
-            'id_region' => $request->Region,
-        ];
-
-        User::where('user_id', Auth::user()->user_id)->update($data);
-
-        return redirect()->route('HomeUser');
+    if ($order->shipment) {
+        $order->shipment->status = 'shipped'; // Pastikan juga model Shipment sudah diatur dengan benar
+        $order->shipment->save();
     }
 
-    // Manage Courses
-    public function AddedCategoryCourses(Request $request)
-    {
-        $request->validate([
-            'BisnisUnit' => 'required',
-            'CategoryName' => 'required',
-            'CategoryDesc' => 'required',
-            'CategoryImage' => 'required|image|mimes:png,jpg,jpeg|max:5120'
-        ]);
+    return redirect()->route('DeliveryOrder')->with('success', 'Order has been accepted and status updated to shipped.');
+}
 
-        if ($request->hasFile('CategoryImage')) {
-            $image = $request->file('CategoryImage');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/category/images', $newName, 'local');
-            }
+public function finishDelivery($orderId)
+{
+    $order = Order::findOrFail($orderId);
+    $order->status = 'delivered';
+    $order->save();
 
-            $data = [
-                'Bisnis_Unit_Id' => $request->BisnisUnit,
-                'Category_Name' => $request->CategoryName,
-                'Category_Desc' => $request->CategoryDesc,
-                'Category_Image' => $newName,
-            ];
+    return redirect()->route('DeliveryOrder')->with('success', 'Delivery has been finished successfully.');
+}
+
+public function cancelOrder(Request $request, $orderId)
+{
+    $order = Order::find($orderId);
+    if ($order && $order->status == 'Pending') {
+        $order->user_id = null;
+        $order->save();
+        return redirect()->route('DeliveryOrder')->with('error', 'Order could not be cancelled.');
+    }
+
+    return redirect()->route('DeliveryOrder')->with('error', 'Order could not be cancelled.');
+}
+
+
+public function processActivityForm(Request $request) {
+    // Ambil order sesuai dengan order_id yang diberikan di request
+    $order = Order::with('items')->where('order_id', $request->input('order_id'))->firstOrFail();
+
+    // Flag untuk menandai jika ada kecurangan
+    $isFraudulent = false;
+
+    // Ambil items dari request
+    $requestItems = $request->input('items');
+
+    // Iterasi melalui item-item pesanan untuk memeriksa kecurangan
+    foreach ($order->items as $index => $item) {
+        // Ambil serial_number dan cobox_id dari request untuk item saat ini
+        $requestSerialNumber = $requestItems[$index]['serial_number'] ?? null;
+        $requestCoboxId = $requestItems[$index]['cobox_id'] ?? null;
+
+        // Periksa apakah serial_number atau cobox_id tidak sesuai
+        if ($item->serial_number != $requestSerialNumber || $item->cobox_id != $requestCoboxId) {
+            $isFraudulent = true;
+            break;
         }
-
-        CategoryCourses::create($data);
-
-        return redirect()->route('ManageCourses')->with('success', 'Succesfully Add Category Courses');
-    }
-    public function EditedCategoryCourses(Request $request, $id)
-    {
-        if ($request->hasFile('CategoryImage')) {
-            $image = $request->file('CategoryImage');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/category/images', $newName, 'local');
-            }
-
-            $data = [
-                'Bisnis_Unit_Id' => $request->BisnisUnit,
-                'Category_Name' => $request->CategoryName,
-                'Category_Desc' => $request->CategoryDesc,
-                'Category_Image' => $newName,
-            ];
-        } else {
-            $data = [
-                'Bisnis_Unit_Id' => $request->BisnisUnit,
-                'Category_Name' => $request->CategoryName,
-                'Category_Desc' => $request->CategoryDesc,
-            ];
-        }
-
-        CategoryCourses::where('Category_Id', $id)->update($data);
-
-        return redirect()->route('ManageCourses')->with('success', 'Succesfully Edit Category');
-    }
-    public function DeleteCategoryCourses($id)
-    {
-        CategoryCourses::destroy($id);
-
-        return redirect()->route('ManageCourses')->with('success', 'Succesfully Delete Category');
     }
 
-    // Courses
-    public function AddedCourses(Request $request, $category)
-    {
-        $request->validate([
-            'CoursesTitle' => 'required',
-            'CoursesDesc' => 'required',
-            'CoursesModule' => 'required',
-            'CoursesImage' => 'required|image|mimes:png,jpg,jpeg|max:5120'
-        ]);
-
-        if ($request->hasFile('CoursesImage')) {
-            $image = $request->file('CoursesImage');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/courses/images', $newName, 'local');
-            }
-
-            $data = [
-                'Category_Id' => CategoryCourses::where('Category_Name', $category)->first()->Category_Id,
-                'Courses_Title' => $request->CoursesTitle,
-                'Courses_Desc' => $request->CoursesDesc,
-                'Courses_Module' => $request->CoursesModule,
-                'Courses_Image' => $newName,
-            ];
-        }
-
-        Courses::create($data);
-
-        return redirect()->route('Courses', ['category' => $category])->with('success', 'Succesfully Add Courses');
-    }
-    public function EditedCourses(Request $request, $category, $id)
-    {
-        if ($request->hasFile('CoursesImage')) {
-            $image = $request->file('CoursesImage');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/courses/images', $newName, 'local');
-            }
-
-            $data = [
-                'Category_Id' => CategoryCourses::where('Category_Name', $category)->first()->Category_Id,
-                'Courses_Title' => $request->CoursesTitle,
-                'Courses_Desc' => $request->CoursesDesc,
-                'Courses_Module' => $request->CoursesModule,
-                'Courses_Image' => $newName,
-            ];
-        } else {
-            $data = [
-                'Category_Id' => CategoryCourses::where('Category_Name', $category)->first()->Category_Id,
-                'Courses_Title' => $request->CoursesTitle,
-                'Courses_Desc' => $request->CoursesDesc,
-                'Courses_Module' => $request->CoursesModule,
-            ];
-        }
-
-        Courses::where('Courses_Id', $id)->update($data);
-
-        return redirect()->route('Courses', ['category' => $category])->with('success', 'Succesfully Edited Courses');
-    }
-    public function DeleteCourses($category, $id)
-    {
-        Courses::destroy($id);
-
-        return redirect()->route('Courses', ['category' => $category])->with('success', 'Succesfully Delete Courses');
+    // Validasi tambahan untuk memeriksa apakah location_map sama dengan location_map dari point_name
+    if ($request->input('location_map') !== $request->input('point_name')) {
+        $isFraudulent = true;
     }
 
-    // Videos
-    public function AddedVideos(Request $request)
-    {
-        $request->validate([
-            'VideoName' => 'required',
-            'VideoDesc' => 'required',
-            'VideoLink' => 'required',
-            'CustomVideoThumbnail' => 'image|mimes:png,jpg,jpeg|max:5120'
-        ]);
+    // Tentukan status berdasarkan hasil pemeriksaan kecurangan
+    $status = $isFraudulent ? 'fraud' : 'verified';
 
-        if ($request->hasFile('CustomVideoThumbnail')) {
-            $image = $request->file('CustomVideoThumbnail');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/thumbnail/images', $newName, 'local');
-            }
+    // Cek apakah customer_name sudah ada dalam request, jika tidak kosong, gunakan nilainya, jika kosong, tetapkan null
+    $customerName = $request->input('customer_name', null);
+    $point_name = $request->input('point_name');
 
-            $data = [
-                'Video_Title' => $request->VideoName,
-                'Video_Desc' => $request->VideoDesc,
-                'Video_Link' => $request->VideoLink,
-                'Video_Thumbnail' => $newName,
-            ];
-        } else {
-            $data = [
-                'Video_Title' => $request->VideoName,
-                'Video_Desc' => $request->VideoDesc,
-                'Video_Link' => $request->VideoLink,
-                'Video_Thumbnail' => $request->Thumbnail,
-            ];
-        }
+    // Simpan laporan kecurangan beserta informasi lainnya
+    $fraudReport = FraudReport::create([
+        'order_id' => $order->order_id,
+        'user_id' => auth()->id(),
+        'customer_name' => $customerName,
+        'location_map' => $request->input('location_map'),
+        'status' => $status,
+        'point_name' => $point_name,
+        'photo_path' => $request->file('photo')->store('fraud_reports', 'public')
+    ]);
 
-        $video = Videos::create($data);
-        foreach ($request->Courses as $courseId) {
-            CategoryVideo::create([
-                'Video_Id' => $video->Video_Id,
-                'Courses_Id' => $courseId,
+    // Update status pesanan menjadi 'done' terlepas dari apakah ada kecurangan atau tidak
+    $order->update(['status' => 'Completed']);
+
+    // Periksa apakah $fraudReport telah dibuat dengan benar
+    if ($fraudReport) {
+        // Simpan item cobox_id dan serial_number ke tabel FraudReportItems
+        foreach ($requestItems as $item) {
+            FraudReportItem::create([
+                'fraud_report_id' => $fraudReport->fraud_report_id, // Menggunakan id dari $fraudReport
+                'cobox_id' => $item['cobox_id'],
+                'serial_number' => $item['serial_number']
             ]);
         }
-
-        return redirect()->route('ManageVideos')->with('success', 'Succesfully Add Video');
     }
 
-    // Detail Video
-    public function AddedVideoDetail(Request $request, $courses)
-    {
-        $request->validate([
-            'VideoName' => 'required',
-            'VideoDesc' => 'required',
-            'VideoLink' => 'required',
-            'CustomVideoThumbnail' => 'image|mimes:png,jpg,jpeg|max:5120'
-        ]);
+    // Redirect ke halaman PointActivity dengan status
+    return redirect()->route('PointActivity')->with('status', $status);
+}
 
-        if ($request->hasFile('CustomVideoThumbnail')) {
-            $image = $request->file('CustomVideoThumbnail');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/thumbnail/' . $courses . '/images', $newName, 'local');
-            }
 
-            $data = [
-                'Video_Title' => $request->VideoName,
-                'Video_Desc' => $request->VideoDesc,
-                'Video_Link' => $request->VideoLink,
-                'Video_Thumbnail' => $newName,
-            ];
-        } else {
-            $data = [
-                'Video_Title' => $request->VideoName,
-                'Video_Desc' => $request->VideoDesc,
-                'Video_Link' => $request->VideoLink,
-                'Video_Thumbnail' => $request->Thumbnail,
-            ];
-        }
+public function CreatePoint(Request $request)
+{
+    // Validasi data yang dikirim dari formulir
+    $validatedData = $request->validate([
+        'point_name' => 'required|string',
+        'location' => 'required|string',
+        // Jika ada field lain, tambahkan di sini
+    ]);
 
-        $video = Videos::create($data);
-        CategoryVideo::create([
-            'Video_Id' => $video->Video_Id,
-            'Courses_Id' => Courses::where('Courses_Title', $courses)->first()->Courses_Id
-        ]);
+    // Lakukan sesuatu dengan data yang diterima, seperti menyimpannya ke database
+    $point = new Point();
+    $point->point_name = $request->input('point_name');
+    $point->location = $request->input('location');
+    // Lakukan operasi lain yang diperlukan, misalnya validasi lebih lanjut, dll.
+    $point->save();
 
-        return redirect()->route('VideoDetail', ['courses' => $courses])->with('success', 'Succesfully Add Video');
-    }
-    public function EditedVideoDetail(Request $request, $courses, $id)
-    {
-        $request->validate([
-            'VideoName' => 'required',
-            'VideoDesc' => 'required',
-            'VideoLink' => 'required',
-            'CustomVideoThumbnail' => 'image|mimes:png,jpg,jpeg|max:5120'
-        ]);
+    // Redirect ke halaman yang sesuai atau kembali ke halaman sebelumnya
+    return redirect()->route('DataPoint')->with('success', 'Titik berhasil ditambahkan!');
+}
 
-        if ($request->hasFile('CustomVideoThumbnail')) {
-            $image = $request->file('CustomVideoThumbnail');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/thumbnail/' . $courses . '/images', $newName, 'local');
-            }
+public function UpdatePoint(Request $request, $id)
+{
+    $request->validate([
+        'point_name' => 'required',
+        'location' => 'required',
+    ]);
 
-            $data = [
-                'Video_Title' => $request->VideoName,
-                'Video_Desc' => $request->VideoDesc,
-                'Video_Link' => $request->VideoLink,
-                'Video_Thumbnail' => $newName,
-            ];
-        } else {
-            $data = [
-                'Video_Title' => $request->VideoName,
-                'Video_Desc' => $request->VideoDesc,
-                'Video_Link' => $request->VideoLink,
-                'Video_Thumbnail' => $request->Thumbnail,
-            ];
-        }
-
-        Videos::where('Video_Id', $id)->update($data);
-        foreach ($request->Courses as $courseId) {
-            CategoryVideo::where('Video_Id', $id)->update([
-                'Video_Id' => $id,
-                'Courses_Id' => $courseId,
-            ]);
-        }
-
-        return redirect()->route('VideoDetail', ['courses' => $courses])->with('success', 'Succesfully Edited Video');
-    }
-    public function DeleteVideoDetail($courses, $id)
-    {
-        Videos::destroy($id);
-
-        return redirect()->route('VideoDetail', ['courses' => $courses])->with('success', 'Succesfully Delete Video');
+    $point = Point::find($id);
+    if (!$point) {
+        return redirect()->route('DataPoint')->with('error', 'Point not found.');
     }
 
-    // Quiz
-    public function AddedQuiZ(Request $request)
-    {
-        $request->validate([
-            'Courses' => 'required',
-            'QuizTitle' => 'required',
-            'QuizDesc' => 'required',
-            'QuizTime' => 'required',
-            'QuizKkm' => 'required',
-        ]);
+    $point->point_name = $request->point_name;
+    $point->location = $request->location;
+    $point->save();
 
-        $data = [
-            'Courses_Id' => $request->Courses,
-            'Quiz_Title' => $request->QuizTitle,
-            'Quiz_Desc' => $request->QuizDesc,
-            'Quiz_Time' => $request->QuizTime,
-            'Quiz_Kkm' => $request->QuizKkm,
-        ];
+    return redirect()->route('DataPoint')->with('success', 'Point updated successfully.');
+}
 
-        Quiz::create($data);
+public function delete($id)
+{
+    $point = Point::find($id);
 
-        return redirect()->route('ManageQuiz')->with('success', 'Succesfully Add Quiz');
-    }
-    public function EditedQuiZ(Request $request, $courses, $id)
-    {
-        $request->validate([
-            'Courses' => 'required',
-            'QuizTitle' => 'required',
-            'QuizDesc' => 'required',
-            'QuizTime' => 'required',
-            'QuizKkm' => 'required',
-        ]);
-
-        $data = [
-            'Courses_Id' => $request->Courses,
-            'Quiz_Title' => $request->QuizTitle,
-            'Quiz_Desc' => $request->QuizDesc,
-            'Quiz_Time' => $request->QuizTime,
-            'Quiz_Kkm' => $request->QuizKkm,
-        ];
-
-        Quiz::where('Quiz_Id', $id)->update($data);
-
-        return redirect()->route('Quiz', ['courses' => $courses])->with('success', 'Succesfully Edit Quiz');
+    if (!$point) {
+        return redirect()->route('DataPoint')->with('error', 'Titik tidak ditemukan.');
     }
 
-    public function DeleteQuiZ($courses, $id)
-    {
-        Quiz::destroy($id);
+    $point->delete();
 
-        return redirect()->route('Quiz', ['courses' => $courses])->with('success', 'Succesfully Delete Quiz');
-    }
+    return redirect()->route('DataPoint')->with('success', 'Titik berhasil dihapus.');
+}
 
-    // Quiz Detail
-    public function AddedQuiZDetail(Request $request, $courses)
-    {
-        $request->validate([
-            'Courses' => 'required',
-            'QuizTitle' => 'required',
-            'QuizDesc' => 'required',
-            'QuizTime' => 'required',
-            'QuizKkm' => 'required',
-        ]);
-
-        $data = [
-            'Courses_Id' => Courses::where('Courses_Title', $request->Courses)->first()->Courses_Id,
-            'Quiz_Title' => $request->QuizTitle,
-            'Quiz_Desc' => $request->QuizDesc,
-            'Quiz_Time' => $request->QuizTime,
-            'QuizKkm' => $request->QuizKkm,
-        ];
-
-        Quiz::create($data);
-
-        return redirect()->route('Quiz', ['courses' => $courses])->with('success', 'Succesfully Add Quiz');
-    }
-
-    public function EditedQuizDetail(Request $request, $courses, $id, $QuestionID)
-    {
-        // dd($request);
-        $request->validate([
-            'Question' => 'required',
-            'Answere' => 'required',
-        ]);
-
-        $dataQuestion = [
-            'Quiz_Id' => $id,
-            'Question' => $request->Question,
-        ];
-
-        QuestionQuiz::where('Question_Id', $QuestionID)->update($dataQuestion);
-
-        foreach ($request->Option as $key => $Option) {
-            $optionId = $request->OptionID[$key];
-
-            OptionQuestion::where('Option_Id', $optionId)->update([
-                'Option' => $Option
-            ]);
-        }
-
-
-        AnswereQuestion::where('Question_Id', $QuestionID)->update([
-            'Answare' => $request->Answere
-        ]);
-
-
-        return redirect()->route('QuizDetail', ['courses' => $courses, 'id' => $id])->with('success', 'Succesfully Edit Quiz');
-    }
-
-
-    // Question
-    public function AddedQuestion(Request $request, $courses, $id)
-    {
-        $request->validate([
-            'Question' => 'required',
-            'Answere' => 'required',
-        ]);
-
-        $dataQuestion = [
-            'Quiz_Id' => $id,
-            'Question' => $request->Question,
-        ];
-
-        $Question = QuestionQuiz::create($dataQuestion);
-
-        foreach ($request->Option as $Option) {
-            OptionQuestion::create([
-                'Question_Id' => $Question->Question_Id,
-                'Option' => $Option
-            ]);
-        }
-
-        AnswereQuestion::create([
-            'Question_Id' => $Question->Question_Id,
-            'Answare' => $request->Answere
-        ]);
-
-
-        return redirect()->route('QuizDetail', ['courses' => $courses, 'id' => $id])->with('success', 'Succesfully Add Question');
-    }
-
-    public function DeleteQuestion($courses, $id, $QuestionID)
-    {
-        QuestionQuiz::destroy($QuestionID);
-
-        return redirect()->route('QuizDetail', ['courses' => $courses, 'id' => $id])->with('success', 'Succesfully Delete Question');
-    }
-
-    // public function DeleteOption($courses, $id, $OptionID)
-    // {
-    //     OptionQuestion::destroy($OptionID);
-
-    //     return redirect()->route('QuizDetail', ['courses' => $courses, 'id' => $id])->with('success', 'Succesfully Delete Option');
-    // }
-
-    // Enrollment
-    public function AddedEnrollment(Request $request)
-    {
-        $request->validate([
-            'CategoryCourses' => 'required',
-            'EnrollmentTitle' => 'required',
-            'EnrollmentDesc' => 'required',
-            'EnrollmentStart' => 'required',
-            'EnrollmentEnd' => 'required',
-            'Certificate' => 'image|mimes:png,jpg,jpeg|max:5120'
-        ]);
-
-        $dataEnrollment = [
-            'Category_Courses_Id' => $request->CategoryCourses,
-            'Enrollment_Title' => $request->EnrollmentTitle,
-            'Enrollment_Desc' => $request->EnrollmentDesc,
-            'Enrollment_Start' => $request->EnrollmentStart,
-            'Enrollment_End' => $request->EnrollmentEnd,
-        ];
-
-        $enrollment = Enrollment::create($dataEnrollment);
-
-        if ($request->hasFile('Certificate')) {
-            $image = $request->file('Certificate');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/certificate/images', $newName, 'local');
-            }
-
-            Certificate::create([
-                'Enrollment_Id' => $enrollment->Enrollment_Id,
-                'Certificate_Image' => $newName,
-            ]);
-        }
-
-
-        return redirect()->route('ManageEnrollment')->with('success', 'Succesfully Add Enrollment');
-    }
-    public function EditedEnrollment(Request $request, $id)
-    {
-        $request->validate([
-            'CategoryCourses' => 'required',
-            'EnrollmentTitle' => 'required',
-            'EnrollmentDesc' => 'required',
-            'EnrollmentStart' => 'required',
-            'EnrollmentEnd' => 'required',
-            'Certificate' => 'image|mimes:png,jpg,jpeg|max:5120'
-        ]);
-
-        $dataEnrollment = [
-            'Category_Courses_Id' => $request->CategoryCourses,
-            'Enrollment_Title' => $request->EnrollmentTitle,
-            'Enrollment_Desc' => $request->EnrollmentDesc,
-            'Enrollment_Start' => $request->EnrollmentStart,
-            'Enrollment_End' => $request->EnrollmentEnd,
-        ];
-
-        $enrollment = Enrollment::where('Enrollment_Id', $id)->update($dataEnrollment);
-
-
-        if ($request->hasFile('Certificate')) {
-            $image = $request->file('Certificate');
-            if ($image->isValid()) {
-                $newName = $image->hashName();
-                $image->storeAs('public/uploads/certificate/images', $newName, 'local');
-            }
-
-            Certificate::where('Enrollment_Id', $id)->update([
-                'Enrollment_Id' => $enrollment->Enrollment_Id,
-                'Certificate_Image' => $newName,
-            ]);
-        }else{
-            Certificate::where('Enrollment_Id', $id)->update([
-                'Enrollment_Id' => $enrollment->Enrollment_Id,
-            ]);
-        }
-
-
-        return redirect()->route('ManageEnrollment')->with('success', 'Succesfully Edit Enrollment');
-    }
-    public function DeleteEnrollment($id)
-    {
-        Enrollment::destroy($id);
-        Certificate::destroy($id);
-
-        return redirect()->route('ManageEnrollment')->with('success', 'Succesfully Delete Enrollment');
-    }
-
-    // Enrollment Detail
-    public function AddedDetailEnrollment(Request $request, $category)
-    {
-        $request->validate([
-            'Users' => 'required',
-            'EnrollmentID' => 'required',
-            'EnrollDate' => 'required',
-        ]);
-
-        foreach ($request->Users as $user) {
-            Enroll::create([
-                'Enrollment_Id' => $request->EnrollmentID,
-                'user_id' => $user,
-                'Enroll_Date' => $request->EnrollDate,
-            ]);
-        }
-
-        return redirect()->route('DetailEnrollment', ['category' => $category])->with('success', 'Succesfully Add User To Enrollment');
-    }
-    public function EditedDetailEnrollment(Request $request, $category, $id)
-    {
-        $request->validate([
-            'Users' => 'required',
-            'EnrollmentID' => 'required',
-            'EnrollDate' => 'required',
-        ]);
-
-        foreach ($request->Users as $user) {
-            Enroll::where('Enroll_Id', $id)->update([
-                'Enrollment_Id' => $request->EnrollmentID,
-                'user_id' => $user,
-                'Enroll_Date' => $request->EnrollDate,
-            ]);
-        }
-
-        return redirect()->route('DetailEnrollment', ['category' => $category])->with('success', 'Succesfully Edit User Enrollment');
-    }
-    public function DeleteDetailEnrollment($category, $id)
-    {
-        Enroll::destroy($id);
-
-        return redirect()->route('DetailEnrollment', ['category' => $category])->with('success', 'Succesfully Delete Enroll User');
-    }
-
-    //Users
-    public function EditedUser(Request $request,  $id)
-    {
-        //$request->validate([
-            //'Users' => 'required',
-            //'username' => 'required',
-            //'role' => 'required',
-            //'Bisnis_Unit_Id' => 'required',
-            //'id_region' => 'required',
-        //]);
-
-        $data = [
-            'username' => $request->username,
-            'Bisnis_Unit_Id' => $request->BisnisUnit,
-            'role' => $request->Role,
-            'id_region' => $request->Region,
-        ];
-
-        User::where('user_id', $id)->update($data);
-
-        return redirect()->route('DataUser')->with('success', 'Succesfully Edit Category');
-
-    }
-
-    public function DeletedUser($id)
-    {
-        User::destroy($id);
-
-        return redirect()->route('DataUser')->with('success', 'Succesfully Delete Enrollment');
-    }
+public function searchOrders(Request $request)
+{
+    
+    $search = $request->input('search');
+    // Proses pencarian
+}
 }
